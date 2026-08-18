@@ -119,15 +119,14 @@ function stripPostalCode(address) {
 /**
  * 報告書向けのテキストに整形する
  * 例: 千葉県富津市亀沢６１９に所在するホテル'GLAMPROOK FUTTSU BRISTOL HILL（グランルーク富津ブリストルヒル）'へ入る。
- *     https://maps.app.goo.gl/xxxxx
  */
-function formatPlaceText(place, originalUrl) {
+function formatPlaceText(place) {
   const label = getJapaneseLabel(place.types, place.name);
   const address = stripPostalCode(place.formatted_address || "");
   // デバッグ用: 業種判定に使った実際のtypesを毎回ログに残す
   // （「施設」判定になった場合の原因調査や、ラベル追加の判断に使う）
   console.log("業種判定:", place.name, "→", label, "| types:", place.types);
-  return `${address}に所在する${label}'${place.name}'へ入る。\n${originalUrl}`;
+  return `${address}に所在する${label}'${place.name}'へ入る。`;
 }
 
 /**
@@ -155,7 +154,7 @@ async function urlToReportText(mapsUrl) {
   }
 
   const place = await getPlaceDetails(placeId);
-  return formatPlaceText(place, mapsUrl);
+  return formatPlaceText(place);
 }
 
 module.exports = { urlToReportText, parseMapsUrl, expandShortUrl };
