@@ -28,12 +28,13 @@ const PRIORITY_ORDER = [
   "spa",
   "gym",
 
-  // 医療
+  // 医療（より専門性の高いものを先に判定）
+  "dentist",
+  "veterinary_care",
+  "physiotherapist",
   "hospital",
   "doctor",
-  "dentist",
   "pharmacy",
-  "physiotherapist",
 
   // 建設・現場関連
   "general_contractor",
@@ -101,6 +102,7 @@ const TYPE_LABELS = {
   hospital: "病院",
   doctor: "医院",
   dentist: "歯科医院",
+  veterinary_care: "動物病院",
   pharmacy: "薬局",
   physiotherapist: "整骨院・整体院",
   city_hall: "市役所・区役所",
@@ -156,6 +158,19 @@ function looksLikeApartment(name = "") {
   return APARTMENT_NAME_KEYWORDS.some((keyword) => name.includes(keyword));
 }
 
+// Google側が「業種」ではなく「住所・建物」としてしか情報を返さない場合のtype
+// これらが含まれる場合、集合住宅・建物である可能性が高い
+const BUILDING_TYPES = ["premise", "subpremise", "street_address"];
+
+/**
+ * typesに住所・建物系のtypeが含まれているかを判定する
+ * @param {string[]} types
+ * @returns {boolean}
+ */
+function looksLikeBuildingType(types = []) {
+  return BUILDING_TYPES.some((t) => types.includes(t));
+}
+
 /**
  * Places APIのtypes配列から、日本語の業種ラベルを1つ選んで返す
  * Google側の返却順ではなく、PRIORITY_ORDER（自前の優先順位）に沿って判定する
@@ -170,7 +185,9 @@ function getJapaneseLabel(types = [], name = "") {
       return TYPE_LABELS[priorityType];
     }
   }
-  if (looksLikeApartment(name)) {
+  // 業種が判定できなかった場合、建物名のキーワード、または
+  // Google側のtypeが住所・建物系（premise等）であれば「集合住宅」として扱う
+  if (looksLikeApartment(name) || looksLikeBuildingType(types)) {
     return "集合住宅";
   }
   return "施設"; // どれにもマッチしなかった場合のデフォルト
