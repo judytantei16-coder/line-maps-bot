@@ -31,9 +31,25 @@ async function expandShortUrl(shortUrl) {
 function parseMapsUrl(url) {
   const decoded = decodeURIComponent(url);
 
-  // 店名部分: /place/<name>/ の間を取得
-  const nameMatch = decoded.match(/\/place\/([^/]+)\//);
-  const name = nameMatch ? nameMatch[1].replace(/\+/g, " ") : null;
+  // 店名部分: /place/<name> の後ろが「/」「@」「?」のいずれか、または文字列の終わりまで
+  let nameMatch = decoded.match(/\/place\/([^/@?]+)/);
+  let name = nameMatch ? nameMatch[1].replace(/\+/g, " ").trim() : null;
+
+  // フォールバック1: q=店名 のようなクエリパラメータ形式（/maps?q=... など）
+  if (!name) {
+    const qMatch = decoded.match(/[?&]q=([^&]+)/);
+    if (qMatch) {
+      name = decodeURIComponent(qMatch[1].replace(/\+/g, " ")).trim();
+    }
+  }
+
+  // フォールバック2: /maps/search/<name>/ 形式（あいまい検索でリダイレクトされた場合）
+  if (!name) {
+    const searchMatch = decoded.match(/\/maps\/search\/([^/@?]+)/);
+    if (searchMatch) {
+      name = searchMatch[1].replace(/\+/g, " ").trim();
+    }
+  }
 
   // 緯度経度: /@<lat>,<lng>,<zoom>z/ の部分を取得
   const latLngMatch = decoded.match(/@(-?\d+\.\d+),(-?\d+\.\d+),/);
@@ -120,11 +136,14 @@ async function urlToReportText(mapsUrl) {
 
   const { name, lat, lng } = parseMapsUrl(expandedUrl);
   if (!name) {
+    // デバッグ用: 実際に展開されたURLをログに残す（次回の原因調査のため）
+    console.error("店名抽出失敗。展開後URL:", expandedUrl);
     throw new Error("URLから店名を抽出できませんでした");
   }
 
   const placeId = await findPlaceId({ name, lat, lng });
   if (!placeId) {
+    console.error("場所が見つからない。抽出した店名:", name, "URL:", expandedUrl);
     throw new Error("該当する場所が見つかりませんでした");
   }
 
