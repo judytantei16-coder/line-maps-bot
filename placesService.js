@@ -107,10 +107,13 @@ async function getPlaceDetails(placeId) {
 }
 
 /**
- * 郵便番号部分を住所テキストから除去する（〒981-3218 のような表記を消す）
+ * 郵便番号部分・先頭の「日本、」表記を住所テキストから除去する
+ * （〒981-3218 東京都〜 のように、都道府県から始まる表記に整える）
  */
 function stripPostalCode(address) {
-  return address.replace(/^〒?\d{3}-?\d{4}\s*/, "");
+  return address
+    .replace(/^日本、?\s*/, "")
+    .replace(/^〒?\d{3}-?\d{4}\s*/, "");
 }
 
 /**
@@ -118,7 +121,7 @@ function stripPostalCode(address) {
  * 例: コンビニエンスストア「セブン-イレブン 港区芝１丁目店」(東京都港区芝1丁目12-7)
  */
 function formatPlaceText(place) {
-  const label = getJapaneseLabel(place.types);
+  const label = getJapaneseLabel(place.types, place.name);
   const address = stripPostalCode(place.formatted_address || "");
   return `${label}「${place.name}」(${address})`;
 }
