@@ -118,12 +118,16 @@ function stripPostalCode(address) {
 
 /**
  * 報告書向けのテキストに整形する
- * 例: コンビニエンスストア「セブン-イレブン 港区芝１丁目店」(東京都港区芝1丁目12-7)
+ * 例: 千葉県富津市亀沢６１９に所在するホテル'GLAMPROOK FUTTSU BRISTOL HILL（グランルーク富津ブリストルヒル）'へ入る。
+ *     https://maps.app.goo.gl/xxxxx
  */
-function formatPlaceText(place) {
+function formatPlaceText(place, originalUrl) {
   const label = getJapaneseLabel(place.types, place.name);
   const address = stripPostalCode(place.formatted_address || "");
-  return `${label}「${place.name}」(${address})`;
+  // デバッグ用: 業種判定に使った実際のtypesを毎回ログに残す
+  // （「施設」判定になった場合の原因調査や、ラベル追加の判断に使う）
+  console.log("業種判定:", place.name, "→", label, "| types:", place.types);
+  return `${address}に所在する${label}'${place.name}'へ入る。\n${originalUrl}`;
 }
 
 /**
@@ -151,7 +155,7 @@ async function urlToReportText(mapsUrl) {
   }
 
   const place = await getPlaceDetails(placeId);
-  return formatPlaceText(place);
+  return formatPlaceText(place, mapsUrl);
 }
 
 module.exports = { urlToReportText, parseMapsUrl, expandShortUrl };
