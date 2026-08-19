@@ -256,38 +256,48 @@ function shortenGenre(genre, placeName) {
   const raw = String(genre).trim();
   const parts = raw.split(/[・･、,／\/]/).map((s) => s.trim()).filter(Boolean);
   if (parts.length <= 1) return raw;
-  const name = (placeName || "").replace(/\s/g, "");
+  const name = String(placeName || "").replace(/\s|　/g, "");
   const hits = parts.filter((p) => name && name.includes(p)).sort((a, b) => b.length - a.length);
   const picked = hits.length > 0 ? hits[0] : parts[0];
   console.log("[genre] 並記 =", raw, "→ 採用:", picked);
   return picked;
 }
 
-/* ============ 6. 整形 ============ */
-function cleanAddress(s) {
+/* ============ 6. 住所整形 ============ */
+const norm = (s) => String(s || "").replace(/\s|　/g, "");
+
+// 共通の下処理（「日本、」と郵便番号を除去）
+function baseAddress(s) {
   if (!s) return "";
   let a = String(s).trim();
   a = a.replace(/^日本[、,\s]*/, "");
   a = a.replace(/^〒?[0-9０-９]{3}[-－−ー]?[0-9０-９]{4}\s*/, "");
-  a = a.replace(/[-‐‑‒–—−]/g, "－");
   return a.trim();
 }
 
-const norm = (s) => String(s || "").replace(/\s|　/g, "");
+// スタイル1用：ハイフンを全角に
+function toStyle1Address(a) {
+  return String(a || "").replace(/[-‐‑‒–—−]/g, "－").trim();
+}
 
-// 住所の末尾にくっついた施設名を取り除く（例:「…６－１４ プレサンス本駒込アカデミア」→「…６－１４」）
+// スタイル2用：数字とハイフンを半角に
+function toStyle2Address(a) {
+  let s = String(a || "");
+  s = s.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+  s = s.replace(/[－‐‑‒–—−ー]/g, "-");
+  s = s.replace(/(\d)\s*-\s*(\d)/g, "$1-$2");
+  return s.trim();
+}
+
 function stripNameFromAddress(address, name) {
   if (!address || !name) return address;
   const a = address.trim();
   const n = name.trim();
   if (norm(a).endsWith(norm(n))) {
-    let cut = a;
+    let cut;
     const idx = a.lastIndexOf(n);
     if (idx > 0) cut = a.slice(0, idx);
-    else {
-      // 空白の入り方が違う場合は文字数で削る
-      cut = a.slice(0, Math.max(0, a.length - n.length));
-    }
+    else cut = a.slice(0, Math.max(0, a.length - n.length));
     cut = cut.replace(/[\s　,、]+$/, "").trim();
     if (cut) return cut;
   }
@@ -303,11 +313,9 @@ const GEO_TYPES = new Set([
   "administrative_area_level_3", "country",
 ]);
 
-// 施設名らしいか（住所そのものではないか）
 function looksLikeName(name) {
   const n = norm(name);
   if (!n) return false;
-  // 都道府県から始まる、または丁目/番地表記で終わるものは住所文字列とみなす
   if (/^(北海道|東京都|京都府|大阪府|.{2,3}県)/.test(n)) return false;
   if (/[0-9０-９][－\-‐ー]?[0-9０-９]*$/.test(n) && /[市区町村郡]/.test(n)) return false;
   if (/^〒?[0-9０-９]{3}/.test(n)) return false;
@@ -349,77 +357,89 @@ async function resolvePlace(inputUrl) {
     }
   }
 
-  // --- 施設名の決定（APIのdisplayName優先、なければURLのqから建物名を切り出す） ---
   let name = "";
   if (place && place.displayName && place.displayName.text) {
     const cand = place.displayName.text.trim();
     if (looksLikeName(cand)) name = cand;
   }
 
-  // --- 住所の決定 ---
   let address = "";
-  if (place) address = cleanAddress(place.formattedAddress);
+  if (place) address = baseAddress(place.formattedAddress);
 
   if (!address && info.query && !/^-?\d+\.\d+,/.test(info.query.trim())) {
-    address = cleanAddress(await geocodeAddress(info.query)) || cleanAddress(info.query);
+    address = baseAddress(await geocodeAddress(info.query)) || baseAddress(info.query);
   }
   if (!address && info.lat !== null) {
-    address = cleanAddress(await reverseGeocode(info.lat, info.lng));
+    address = baseAddress(await reverseGeocode(info.lat, info.lng));
   }
-  if (!address && info.query) address = cleanAddress(info.query);
+  if (!address && info.query) address = baseAddress(info.query);
 
-  // 住所末尾に施設名が入っている場合は切り離す（ここが今回の修正点）
   if (name) address = stripNameFromAddress(address, name);
 
-  // --- ジャンル ---
   let genreRaw = "";
   let genre = "";
   let genreSource = "none";
 
   if (name && place) {
-    const pt = place.primaryType || "";
-    const isGeoOnly =
-      (pt && GEO_TYPES.has(pt)) ||
-      ((place.types || []).length > 0 && (place.types || []).every((t) => GEO_TYPES.has(t)));
-
     if (place.primaryTypeDisplayName && place.primaryTypeDisplayName.text) {
       genreRaw = place.primaryTypeDisplayName.text;
       genreSource = "api";
-    } else if (!isGeoOnly || true) {
+    } else {
       const g = await genreFromMapsPage(place.id || info.placeId, name);
       if (g) { genreRaw = g; genreSource = "mapsPage"; }
     }
     genre = shortenGenre(genreRaw, name);
   }
 
-  // --- 文言組み立て ---
-  let text;
-  if (name && address) {
-    text = genre
-      ? address + "に所在する" + genre + "'" + name + "'へ入る。"
-      : address + "に所在する'" + name + "'へ入る。";
-  } else if (name && !address) {
-    text = genre ? genre + "'" + name + "'へ入る。" : "'" + name + "'へ入る。";
-  } else {
-    if (!address) throw new Error("住所を特定できませんでした");
-    text = address + "へ入る。";
-  }
-
-  console.log("[result] route =", route, "/ name =", name,
-    "/ genreRaw =", genreRaw, "/ genre =", genre, "(" + genreSource + ") /", text);
+  console.log("[result] route =", route, "/ name =", name, "/ genre =", genre,
+    "(" + genreSource + ") / address =", address);
   return {
     finalUrl: expanded.finalUrl, info, place, route,
-    name, address, genreRaw, genre, genreSource, text,
+    name, address, genreRaw, genre, genreSource,
   };
 }
 
-async function urlToReportText(inputUrl) {
+/* ============ 8. スタイル別の文言組み立て ============ */
+function formatStyle1(r) {
+  const addr = toStyle1Address(r.address);
+  if (r.name && addr) {
+    return r.genre
+      ? addr + "に所在する" + r.genre + "'" + r.name + "'へ入る。"
+      : addr + "に所在する'" + r.name + "'へ入る。";
+  }
+  if (r.name && !addr) {
+    return r.genre ? r.genre + "'" + r.name + "'へ入る。" : "'" + r.name + "'へ入る。";
+  }
+  if (!addr) throw new Error("住所を特定できませんでした");
+  return addr + "へ入る。";
+}
+
+function formatStyle2(r) {
+  const addr = toStyle2Address(r.address);
+  if (r.name) {
+    const head = r.genre ? r.genre + "「" + r.name + "」" : "「" + r.name + "」";
+    return addr ? head + "(" + addr + ")" : head;
+  }
+  if (!addr) throw new Error("住所を特定できませんでした");
+  return addr;
+}
+
+function formatByStyle(r, style) {
+  return style === 2 ? formatStyle2(r) : formatStyle1(r);
+}
+
+async function urlToReportText(inputUrl, style) {
   const r = await resolvePlace(inputUrl);
-  return r.text;
+  return formatByStyle(r, style === 2 ? 2 : 1);
 }
 
 async function urlToDebug(inputUrl) {
-  return await resolvePlace(inputUrl);
+  const r = await resolvePlace(inputUrl);
+  return { ...r, style1: safe(() => formatStyle1(r)), style2: safe(() => formatStyle2(r)) };
+}
+
+function safe(fn) {
+  try { return fn(); } catch (e) { return "ERROR: " + e.message; }
 }
 
 module.exports = { urlToReportText, urlToDebug };
