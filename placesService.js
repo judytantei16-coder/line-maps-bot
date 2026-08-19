@@ -33,21 +33,6 @@ async function expandShortUrl(shortUrl) {
   return res.request?.res?.responseUrl || res.request?.responseURL || shortUrl;
 }
 
-function extractFacilityName(url) {
-  const decoded = decodeURIComponent(url);
-
-  // /place/施設名/ の形式から抽出
-  const placeMatch = decoded.match(/\/place\/([^/@?]+)/);
-  if (placeMatch) {
-    const name = placeMatch[1].replace(/\+/g, " ").trim();
-    // 住所っぽくない（〒・数字始まり・都道府県のみでない）場合だけ使う
-    if (name && !/^〒/.test(name) && !/^[-\d.,]+$/.test(name)) {
-      return name;
-    }
-  }
-  return null;
-}
-
 function extractLatLng(url) {
   const decoded = decodeURIComponent(url);
   const latLngMatch = decoded.match(/@(-?\d+\.\d+),(-?\d+\.\d+),/);
@@ -57,20 +42,15 @@ function extractLatLng(url) {
       lng: parseFloat(latLngMatch[2]),
     };
   }
+  // q=lat,lng 形式
+  const qMatch = decoded.match(/[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if (qMatch) {
+    return {
+      lat: parseFloat(qMatch[1]),
+      lng: parseFloat(qMatch[2]),
+    };
+  }
   return { lat: null, lng: null };
-}
-
-function isAddressOnlyUrl(url) {
-  const decoded = decodeURIComponent(url);
-  // /place/ がない、またはqパラメータが住所形式
-  const hasPlacePath = /\/place\//.test(decoded);
-  if (!hasPlacePath) return true;
-
-  const placeMatch = decoded.match(/\/place\/([^/@?]+)/);
-  if (!placeMatch) return true;
-
-  const name = placeMatch[1].replace(/\+/g, " ").trim();
-  return /^〒/.test(name) || /^[-\d.,]+$/.test(name);
 }
 
 async function reverseGeocode(lat, lng) {
@@ -109,6 +89,16 @@ function formatPlaceText(place) {
   }
 }
 
+// LINEのテキストから施設名を抽出する
+// 例: "六本木ヒルズ・港区, 東京都" → "六本木ヒルズ"
+function extractNameFromLineText(text) {
+  if (!text) return null;
+  // 「・」や「,」の前の部分が施設名
+  const match = text.match(/^([^・,，、\n]+)/);
+  if (match) return match[1].trim();
+  return text.trim();
+}
+
 async function urlToReportText(mapsUrl, lineText) {
   const expandedUrl = mapsUrl.includes("goo.gl")
     ? await expandShortUrl(mapsUrl)
@@ -116,25 +106,29 @@ async function urlToReportText(mapsUrl, lineText) {
 
   console.log("展開後URL:", expandedUrl);
 
-  // 住所ピン判定
-  if (isAddressOnlyUrl(expandedUrl)) {
-    const { lat, lng } = extractLatLng(expandedUrl);
-    if (lat != null && lng != null) {
-      const address = await reverseGeocode(lat, lng);
-      return `${address}へ入る。`;
-    }
+  const { lat, lng } = extractLatLng(expandedUrl);
+
+  // LINEテキストから施設名を抽出
+  const facilityName = extractNameFromLineText(lineText);
+  console.log("抽出施設名:", facilityName, "| 緯度経度:", lat, lng);
+
+  // 施設名がない or 住所っぽい場合は住所ピン扱い
+  const isAddressPin =
+    !facilityName ||
+    /^〒/.test(facilityName) ||
+    /^\d/.test(facilityName) ||
+    /[都道府県市区町村]\d/.test(facilityName);
+
+  if (isAddressPin && lat != null && lng != null) {
+    const address = await reverseGeocode(lat, lng);
+    return `${address}へ入る。`;
   }
 
-  // 施設名をURLから抽出
-  const facilityName = extractFacilityName(expandedUrl);
-
-  // 検索クエリは施設名のみ（住所なし）
-  const searchQuery = facilityName || lineText;
-  if (!searchQuery) {
+  if (!facilityName) {
     throw new Error("施設名を特定できませんでした");
   }
 
-  const place = await searchPlaceNew(searchQuery);
+  const place = await searchPlaceNew(facilityName);
   if (!place) {
     throw new Error("該当する場所が見つかりませんでした");
   }
