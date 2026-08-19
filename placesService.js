@@ -65,22 +65,22 @@ async function findPlaceId({ name, lat, lng }) {
 }
 
 async function getPlaceDetails(placeId) {
-  // Places API (New) を使用してprimaryTypeDisplayNameを取得
   const res = await axios.get(
-    `https://places.googleapis.com/v1/places/${placeId}`,
+    "https://maps.googleapis.com/maps/api/place/details/json",
     {
-      headers: {
-        "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
-        "X-Goog-FieldMask": "displayName,formattedAddress,primaryTypeDisplayName",
+      params: {
+        place_id: placeId,
+        fields: "name,formatted_address,types",
+        language: "ja",
+        key: GOOGLE_MAPS_API_KEY,
       },
-      params: { languageCode: "ja" },
     }
   );
 
-  if (!res.data) {
-    throw new Error("Places API (New) error");
+  if (res.data.status !== "OK") {
+    throw new Error(`Places API error: ${res.data.status}`);
   }
-  return res.data;
+  return res.data.result;
 }
 
 async function reverseGeocode(lat, lng) {
@@ -105,17 +105,89 @@ function stripPostalCode(address) {
     .replace(/^〒?\d{3}-?\d{4}\s*/, "");
 }
 
+const TYPE_LABELS = {
+  convenience_store: "コンビニエンスストア",
+  supermarket: "スーパーマーケット",
+  department_store: "百貨店",
+  shopping_mall: "ショッピングモール",
+  clothing_store: "衣料品店",
+  hardware_store: "ホームセンター",
+  home_goods_store: "生活雑貨店",
+  electronics_store: "家電量販店",
+  restaurant: "飲食店",
+  cafe: "カフェ",
+  bakery: "パン屋",
+  bar: "バー",
+  meal_takeaway: "飲食店",
+  hair_care: "美容院",
+  beauty_salon: "美容院",
+  spa: "エステ・スパ",
+  gym: "ジム",
+  dentist: "歯科医院",
+  veterinary_care: "動物病院",
+  hospital: "病院",
+  doctor: "医院",
+  pharmacy: "薬局",
+  physiotherapist: "整骨院・整体院",
+  city_hall: "市役所・区役所",
+  post_office: "郵便局",
+  bank: "銀行",
+  atm: "ATM",
+  police: "警察署",
+  fire_station: "消防署",
+  lodging: "宿泊施設",
+  real_estate_agency: "不動産会社",
+  general_contractor: "建設会社",
+  storage: "倉庫・トランクルーム",
+  school: "学校",
+  university: "大学",
+  place_of_worship: "宗教施設",
+  park: "公園",
+  library: "図書館",
+  train_station: "駅",
+  bus_station: "バス停",
+  gas_station: "ガソリンスタンド",
+  car_repair: "自動車整備工場",
+  parking: "駐車場",
+  tourist_attraction: "観光スポット",
+  amusement_park: "遊園地",
+  museum: "博物館・美術館",
+  stadium: "スタジアム",
+  movie_theater: "映画館",
+  night_club: "ナイトクラブ",
+  apartment_complex: "集合住宅",
+};
+
+const PRIORITY_ORDER = [
+  "convenience_store", "supermarket", "department_store", "shopping_mall",
+  "clothing_store", "hardware_store", "home_goods_store", "electronics_store",
+  "restaurant", "cafe", "bakery", "bar", "meal_takeaway",
+  "hair_care", "beauty_salon", "spa", "gym",
+  "dentist", "veterinary_care", "hospital", "doctor", "pharmacy", "physiotherapist",
+  "city_hall", "post_office", "police", "fire_station",
+  "school", "university", "place_of_worship", "library",
+  "tourist_attraction", "amusement_park", "museum", "stadium", "movie_theater",
+  "train_station", "bus_station", "gas_station", "car_repair",
+  "lodging", "real_estate_agency", "general_contractor", "storage",
+  "night_club", "apartment_complex",
+  "bank", "atm", "parking", "park",
+];
+
+function getLabel(types = []) {
+  for (const t of PRIORITY_ORDER) {
+    if (types.includes(t)) return TYPE_LABELS[t];
+  }
+  return null;
+}
+
 function formatPlaceText(place) {
-  const name = place.displayName?.text || "";
-  const address = stripPostalCode(place.formattedAddress || "");
-  const label = place.primaryTypeDisplayName?.text || null;
-
-  console.log("業種判定:", name, "→", label);
-
+  const address = stripPostalCode(place.formatted_address || "");
+  const label = getLabel(place.types);
+  console.log("業種判定:", place.name, "→", label, "| types:", place.types);
   if (label) {
-    return `${address}に所在する${label}'${name}'へ入る。`;
+    return `${address}に所在する${label}'${place.name}'へ入る。`;
   } else {
-    return `${address}に所在する'${name}'へ入る。`;
+    return `${address}に所在する'${place.name}'へ入る。`;
   }
 }
 
@@ -138,7 +210,7 @@ async function urlToReportText(mapsUrl) {
 
   const placeId = await findPlaceId({ name, lat, lng });
   if (!placeId) {
-    console.error("場所が見つからない。抽出した店名:", name, "URL:", expandedUrl);
+    console.error("場所が見つからない:", name);
     throw new Error("該当する場所が見つかりませんでした");
   }
 
