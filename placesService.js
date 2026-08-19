@@ -1,11 +1,12 @@
 "use strict";
 
-// Renderの環境変数 GOOGLE_MAPS_API_KEY を優先。未設定なら下のキーを使う。
 const GOOGLE_API_KEY =
   process.env.GOOGLE_MAPS_API_KEY || "AIzaSyBjnXNH_yOh687RqZhszfeldxYAc0iLRoY";
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
+
+const genreCache = new Map();
 
 /* ============ 1. 短縮URLを展開 ============ */
 async function expandUrl(shortUrl) {
@@ -37,7 +38,7 @@ async function expandUrl(shortUrl) {
   return { finalUrl: current, html };
 }
 
-/* ============ 2. URLから手がかりを全部抜く ============ */
+/* ============ 2. URLから手がかりを抽出 ============ */
 function parseMapsUrl(finalUrl, html) {
   const info = { ftid: null, placeId: null, query: null, name: null, lat: null, lng: null };
   const hay = finalUrl + "\n" + (html || "");
@@ -92,9 +93,7 @@ function parseMapsUrl(finalUrl, html) {
   return info;
 }
 
-/* ============ 3. Google API 呼び出し ============ */
-
-// ftid → place_id（旧Places APIの ftid パラメータ）
+/* ============ 3. Google API ============ */
 async function placeIdFromFtid(ftid) {
   const url =
     "https://maps.googleapis.com/maps/api/place/details/json" +
@@ -111,7 +110,6 @@ async function placeIdFromFtid(ftid) {
   return null;
 }
 
-// place_id → 詳細（Places API New / 日本語ジャンル付き）
 async function getPlaceDetails(placeId) {
   const url =
     "https://places.googleapis.com/v1/places/" + encodeURIComponent(placeId) +
@@ -129,8 +127,9 @@ async function getPlaceDetails(placeId) {
       console.error("[details] エラー:", JSON.stringify(json).slice(0, 400));
       return null;
     }
-    console.log("[details] OK:", json.displayName && json.displayName.text,
-      "/", json.primaryTypeDisplayName && json.primaryTypeDisplayName.text);
+    console.log("[details] name =", json.displayName && json.displayName.text,
+      "/ primaryType =", json.primaryType,
+      "/ displayName =", json.primaryTypeDisplayName && json.primaryTypeDisplayName.text);
     return json;
   } catch (e) {
     console.error("[details] 例外:", e.message);
@@ -138,7 +137,6 @@ async function getPlaceDetails(placeId) {
   }
 }
 
-// テキスト検索（ftidが使えなかった時の本命フォールバック）
 async function searchText(query, lat, lng) {
   const body = { textQuery: query, languageCode: "ja", regionCode: "JP", maxResultCount: 1 };
   if (lat !== null && lng !== null) {
@@ -199,7 +197,60 @@ async function reverseGeocode(lat, lng) {
   return null;
 }
 
-/* ============ 4. 文字列整形 ============ */
+/* ====== 4. APIがジャンルを返さない時：マップページから表示ジャンルを読む ====== */
+async function genreFromMapsPage(placeId, placeName) {
+  if (!placeId) return null;
+  if (genreCache.has(placeId)) return genreCache.get(placeId);
+
+  const url =
+    "https://www.google.com/maps/place/?q=place_id:" +
+    encodeURIComponent(placeId) + "&hl=ja&gl=JP";
+  let html = "";
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": UA,
+        "Accept-Language": "ja-JP,ja;q=0.9",
+        Cookie: "CONSENT=YES+jp",
+      },
+    });
+    html = await res.text();
+  } catch (e) {
+    console.error("[genrePage] fetch失敗:", e.message);
+    return null;
+  }
+
+  const counts = new Map();
+  const add = (s) => {
+    if (!s) return;
+    const t = s.trim();
+    if (t.length < 2 || t.length > 20) return;
+    if (!/[ぁ-んァ-ヶ一-龥]/.test(t)) return;        // 日本語を含むもののみ
+    if (placeName && t === placeName.trim()) return;  // 施設名は除外
+    if (/[0-9０-９]{3,}|http|営業|時間|レビュー|口コミ/.test(t)) return;
+    counts.set(t, (counts.get(t) || 0) + 1);
+  };
+
+  // Googleマップの埋め込みデータでは、カテゴリ名が gcid:xxx と隣接して出現する
+  let m;
+  const re1 = /gcid:[a-z0-9_]+\\?",\\?"([^"\\]{2,20})\\?"/g;
+  while ((m = re1.exec(html)) !== null) add(m[1]);
+  const re2 = /\\"([^"\\]{2,20})\\",\\"gcid:[a-z0-9_]+/g;
+  while ((m = re2.exec(html)) !== null) add(m[1]);
+
+  if (counts.size === 0) {
+    console.log("[genrePage] 抽出できず");
+    genreCache.set(placeId, null);
+    return null;
+  }
+
+  const best = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  console.log("[genrePage] 候補 =", JSON.stringify([...counts.keys()].slice(0, 8)), "→ 採用:", best);
+  genreCache.set(placeId, best);
+  return best;
+}
+
+/* ============ 5. 整形 ============ */
 function cleanAddress(s) {
   if (!s) return "";
   let a = String(s).trim();
@@ -230,7 +281,7 @@ function isFacility(place, address) {
   return true;
 }
 
-/* ============ 5. 本体 ============ */
+/* ============ 6. 本体 ============ */
 async function resolvePlace(inputUrl) {
   const expanded = await expandUrl(inputUrl);
   const info = parseMapsUrl(expanded.finalUrl, expanded.html);
@@ -252,9 +303,7 @@ async function resolvePlace(inputUrl) {
   }
 
   if (!place && (info.query || info.name)) {
-    const q = info.name
-      ? (info.name + " " + (info.query || "")).trim()
-      : info.query;
+    const q = info.name ? (info.name + " " + (info.query || "")).trim() : info.query;
     const cand = await searchText(q, info.lat, info.lng);
     if (cand) {
       const nm = cand.displayName && cand.displayName.text ? cand.displayName.text : "";
@@ -278,17 +327,25 @@ async function resolvePlace(inputUrl) {
   }
   if (!address && info.query) address = cleanAddress(info.query);
 
+  let genre = "";
+  let genreSource = "none";
   let text;
+
   if (place && isFacility(place, address)) {
     const name = place.displayName.text.trim();
+
+    if (place.primaryTypeDisplayName && place.primaryTypeDisplayName.text) {
+      genre = place.primaryTypeDisplayName.text;
+      genreSource = "api";
+    } else {
+      const g = await genreFromMapsPage(place.id || info.placeId, name);
+      if (g) { genre = g; genreSource = "mapsPage"; }
+    }
+
     let addr = address;
     if (addr.replace(/\s/g, "").endsWith(name.replace(/\s/g, ""))) {
       addr = addr.slice(0, addr.length - name.length).trim();
     }
-    const genre =
-      place.primaryTypeDisplayName && place.primaryTypeDisplayName.text
-        ? place.primaryTypeDisplayName.text
-        : "";
     text = genre
       ? addr + "に所在する" + genre + "'" + name + "'へ入る。"
       : addr + "に所在する'" + name + "'へ入る。";
@@ -297,8 +354,8 @@ async function resolvePlace(inputUrl) {
     text = address + "へ入る。";
   }
 
-  console.log("[result] route =", route, "/ text =", text);
-  return { finalUrl: expanded.finalUrl, info, place, route, text };
+  console.log("[result] route =", route, "/ genre =", genre, "(" + genreSource + ") /", text);
+  return { finalUrl: expanded.finalUrl, info, place, route, genre, genreSource, text };
 }
 
 async function urlToReportText(inputUrl) {
