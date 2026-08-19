@@ -33,11 +33,12 @@ async function handleEvent(event) {
 
   const mapsUrl = match[1];
 
-  // LINEのメッセージから施設名を抽出（URLの前後にあるテキスト）
-  const beforeUrl = text.replace(mapsUrl, "").trim();
+  // URLを除いた部分のテキスト（施設名のヒントになる）
+  const textWithoutUrl = text.replace(mapsUrl, "").trim();
+  console.log("URLなしテキスト:", textWithoutUrl);
 
   try {
-    const replyText = await urlToReportText(mapsUrl, beforeUrl);
+    const replyText = await urlToReportText(mapsUrl, textWithoutUrl);
     await client.replyMessage(event.replyToken, {
       type: "text",
       text: replyText,
