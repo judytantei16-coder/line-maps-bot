@@ -9,7 +9,18 @@ async function expandShortUrl(shortUrl) {
   });
   const finalUrl =
     res.request?.res?.responseUrl || res.request?.responseURL || shortUrl;
+  console.log("展開後URL:", finalUrl);
   return finalUrl;
+}
+
+function extractPlaceId(url) {
+  const decoded = decodeURIComponent(url);
+  // Place IDはURLに "1s0x..." または "place_id=..." の形式で含まれることがある
+  const m1 = decoded.match(/!1s(ChIJ[A-Za-z0-9_-]+)/);
+  if (m1) return m1[1];
+  const m2 = decoded.match(/place_id=([A-Za-z0-9_-]+)/);
+  if (m2) return m2[1];
+  return null;
 }
 
 function parseMapsUrl(url) {
@@ -23,23 +34,18 @@ function parseMapsUrl(url) {
     if (qMatch) name = decodeURIComponent(qMatch[1].replace(/\+/g, " ")).trim();
   }
 
-  if (!name) {
-    const searchMatch = decoded.match(/\/maps\/search\/([^/@?]+)/);
-    if (searchMatch) name = searchMatch[1].replace(/\+/g, " ").trim();
-  }
-
   const latLngMatch = decoded.match(/@(-?\d+\.\d+),(-?\d+\.\d+),/);
   const lat = latLngMatch ? parseFloat(latLngMatch[1]) : null;
   const lng = latLngMatch ? parseFloat(latLngMatch[2]) : null;
 
-  const hasPlacePath = /\/place\//.test(decoded);
   const isAddressPin =
-    !hasPlacePath ||
     !name ||
     /^\d/.test(name) ||
     /^〒/.test(name) ||
-    /^[-\d.,]+$/.test(name);
+    /^[-\d.,]+$/.test(name) ||
+    /[都道府県市区町村]/.test(name);
 
+  console.log("parseMapsUrl:", { name, lat, lng, isAddressPin });
   return { name, lat, lng, isAddressPin };
 }
 
@@ -53,12 +59,10 @@ async function findPlaceId({ name, lat, lng }) {
   if (lat != null && lng != null) {
     params.locationbias = `point:${lat},${lng}`;
   }
-
   const res = await axios.get(
     "https://maps.googleapis.com/maps/api/place/findplacefromtext/json",
     { params }
   );
-
   const candidate = res.data?.candidates?.[0];
   if (!candidate) return null;
   return candidate.place_id;
@@ -70,13 +74,12 @@ async function getPlaceDetails(placeId) {
     {
       params: {
         place_id: placeId,
-        fields: "name,formatted_address,types",
+        fields: "name,formatted_address,types,editorial_summary",
         language: "ja",
         key: GOOGLE_MAPS_API_KEY,
       },
     }
   );
-
   if (res.data.status !== "OK") {
     throw new Error(`Places API error: ${res.data.status}`);
   }
@@ -169,8 +172,7 @@ const PRIORITY_ORDER = [
   "tourist_attraction", "amusement_park", "museum", "stadium", "movie_theater",
   "train_station", "bus_station", "gas_station", "car_repair",
   "lodging", "real_estate_agency", "general_contractor", "storage",
-  "night_club", "apartment_complex",
-  "bank", "atm", "parking", "park",
+  "night_club", "apartment_complex", "parking", "park",
 ];
 
 function getLabel(types = []) {
@@ -183,9 +185,15 @@ function getLabel(types = []) {
 function formatPlaceText(place) {
   const address = stripPostalCode(place.formatted_address || "");
   const label = getLabel(place.types);
-  console.log("業種判定:", place.name, "→", label, "| types:", place.types);
+  const summary = place.editorial_summary?.overview || null;
+  console.log("業種判定:", place.name, "→", label, "| summary:", summary, "| types:", place.types);
+
   if (label) {
     return `${address}に所在する${label}'${place.name}'へ入る。`;
+  } else if (summary) {
+    // editorial_summaryから最初の単語（「複合施設」「公共施設」など）を使う
+    const firstWord = summary.replace(/[、。].*/g, "").split(/[、，,\s]/)[0];
+    return `${address}に所在する${firstWord}'${place.name}'へ入る。`;
   } else {
     return `${address}に所在する'${place.name}'へ入る。`;
   }
@@ -195,6 +203,14 @@ async function urlToReportText(mapsUrl) {
   const expandedUrl = mapsUrl.includes("goo.gl")
     ? await expandShortUrl(mapsUrl)
     : mapsUrl;
+
+  // まずPlace IDが直接取れるか試す
+  const directPlaceId = extractPlaceId(expandedUrl);
+  if (directPlaceId) {
+    console.log("Place ID直接取得:", directPlaceId);
+    const place = await getPlaceDetails(directPlaceId);
+    return formatPlaceText(place);
+  }
 
   const { name, lat, lng, isAddressPin } = parseMapsUrl(expandedUrl);
 
