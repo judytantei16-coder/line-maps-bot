@@ -225,13 +225,12 @@ async function genreFromMapsPage(placeId, placeName) {
     if (!s) return;
     const t = s.trim();
     if (t.length < 2 || t.length > 20) return;
-    if (!/[ぁ-んァ-ヶ一-龥]/.test(t)) return;        // 日本語を含むもののみ
-    if (placeName && t === placeName.trim()) return;  // 施設名は除外
+    if (!/[ぁ-んァ-ヶ一-龥]/.test(t)) return;
+    if (placeName && t === placeName.trim()) return;
     if (/[0-9０-９]{3,}|http|営業|時間|レビュー|口コミ/.test(t)) return;
     counts.set(t, (counts.get(t) || 0) + 1);
   };
 
-  // Googleマップの埋め込みデータでは、カテゴリ名が gcid:xxx と隣接して出現する
   let m;
   const re1 = /gcid:[a-z0-9_]+\\?",\\?"([^"\\]{2,20})\\?"/g;
   while ((m = re1.exec(html)) !== null) add(m[1]);
@@ -250,7 +249,25 @@ async function genreFromMapsPage(placeId, placeName) {
   return best;
 }
 
-/* ============ 5. 整形 ============ */
+/* ====== 5. 並記カテゴリを1語に絞る（自前の対応表は使わない） ====== */
+function shortenGenre(genre, placeName) {
+  if (!genre) return "";
+  const raw = String(genre).trim();
+  const parts = raw
+    .split(/[・･、,／\/]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.length <= 1) return raw;
+
+  const name = (placeName || "").replace(/\s/g, "");
+  // 施設名に含まれる語を優先（例: 小島医院 → 「医院」）。複数あれば長い方。
+  const hits = parts.filter((p) => name && name.includes(p)).sort((a, b) => b.length - a.length);
+  const picked = hits.length > 0 ? hits[0] : parts[0];
+  console.log("[genre] 並記 =", raw, "→ 採用:", picked);
+  return picked;
+}
+
+/* ============ 6. 整形 ============ */
 function cleanAddress(s) {
   if (!s) return "";
   let a = String(s).trim();
@@ -281,7 +298,7 @@ function isFacility(place, address) {
   return true;
 }
 
-/* ============ 6. 本体 ============ */
+/* ============ 7. 本体 ============ */
 async function resolvePlace(inputUrl) {
   const expanded = await expandUrl(inputUrl);
   const info = parseMapsUrl(expanded.finalUrl, expanded.html);
@@ -327,6 +344,7 @@ async function resolvePlace(inputUrl) {
   }
   if (!address && info.query) address = cleanAddress(info.query);
 
+  let genreRaw = "";
   let genre = "";
   let genreSource = "none";
   let text;
@@ -335,12 +353,14 @@ async function resolvePlace(inputUrl) {
     const name = place.displayName.text.trim();
 
     if (place.primaryTypeDisplayName && place.primaryTypeDisplayName.text) {
-      genre = place.primaryTypeDisplayName.text;
+      genreRaw = place.primaryTypeDisplayName.text;
       genreSource = "api";
     } else {
       const g = await genreFromMapsPage(place.id || info.placeId, name);
-      if (g) { genre = g; genreSource = "mapsPage"; }
+      if (g) { genreRaw = g; genreSource = "mapsPage"; }
     }
+
+    genre = shortenGenre(genreRaw, name);
 
     let addr = address;
     if (addr.replace(/\s/g, "").endsWith(name.replace(/\s/g, ""))) {
@@ -354,8 +374,9 @@ async function resolvePlace(inputUrl) {
     text = address + "へ入る。";
   }
 
-  console.log("[result] route =", route, "/ genre =", genre, "(" + genreSource + ") /", text);
-  return { finalUrl: expanded.finalUrl, info, place, route, genre, genreSource, text };
+  console.log("[result] route =", route, "/ genreRaw =", genreRaw,
+    "/ genre =", genre, "(" + genreSource + ") /", text);
+  return { finalUrl: expanded.finalUrl, info, place, route, genreRaw, genre, genreSource, text };
 }
 
 async function urlToReportText(inputUrl) {
