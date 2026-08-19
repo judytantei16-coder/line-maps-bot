@@ -119,7 +119,8 @@ async function getPlaceDetails(placeId) {
       headers: {
         "X-Goog-Api-Key": GOOGLE_API_KEY,
         "X-Goog-FieldMask":
-          "id,displayName,formattedAddress,primaryTypeDisplayName,primaryType,types,location",
+          "id,displayName,formattedAddress,addressComponents," +
+          "primaryTypeDisplayName,primaryType,types,location",
       },
     });
     const json = await res.json();
@@ -129,7 +130,7 @@ async function getPlaceDetails(placeId) {
     }
     console.log("[details] name =", json.displayName && json.displayName.text,
       "/ primaryType =", json.primaryType,
-      "/ displayName =", json.primaryTypeDisplayName && json.primaryTypeDisplayName.text);
+      "/ genre =", json.primaryTypeDisplayName && json.primaryTypeDisplayName.text);
     return json;
   } catch (e) {
     console.error("[details] 例外:", e.message);
@@ -149,7 +150,7 @@ async function searchText(query, lat, lng) {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": GOOGLE_API_KEY,
         "X-Goog-FieldMask":
-          "places.id,places.displayName,places.formattedAddress," +
+          "places.id,places.displayName,places.formattedAddress,places.addressComponents," +
           "places.primaryTypeDisplayName,places.primaryType,places.types,places.location",
       },
       body: JSON.stringify(body),
@@ -249,18 +250,13 @@ async function genreFromMapsPage(placeId, placeName) {
   return best;
 }
 
-/* ====== 5. 並記カテゴリを1語に絞る（自前の対応表は使わない） ====== */
+/* ====== 5. 並記カテゴリを1語に絞る ====== */
 function shortenGenre(genre, placeName) {
   if (!genre) return "";
   const raw = String(genre).trim();
-  const parts = raw
-    .split(/[・･、,／\/]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const parts = raw.split(/[・･、,／\/]/).map((s) => s.trim()).filter(Boolean);
   if (parts.length <= 1) return raw;
-
   const name = (placeName || "").replace(/\s/g, "");
-  // 施設名に含まれる語を優先（例: 小島医院 → 「医院」）。複数あれば長い方。
   const hits = parts.filter((p) => name && name.includes(p)).sort((a, b) => b.length - a.length);
   const picked = hits.length > 0 ? hits[0] : parts[0];
   console.log("[genre] 並記 =", raw, "→ 採用:", picked);
@@ -277,6 +273,27 @@ function cleanAddress(s) {
   return a.trim();
 }
 
+const norm = (s) => String(s || "").replace(/\s|　/g, "");
+
+// 住所の末尾にくっついた施設名を取り除く（例:「…６－１４ プレサンス本駒込アカデミア」→「…６－１４」）
+function stripNameFromAddress(address, name) {
+  if (!address || !name) return address;
+  const a = address.trim();
+  const n = name.trim();
+  if (norm(a).endsWith(norm(n))) {
+    let cut = a;
+    const idx = a.lastIndexOf(n);
+    if (idx > 0) cut = a.slice(0, idx);
+    else {
+      // 空白の入り方が違う場合は文字数で削る
+      cut = a.slice(0, Math.max(0, a.length - n.length));
+    }
+    cut = cut.replace(/[\s　,、]+$/, "").trim();
+    if (cut) return cut;
+  }
+  return a;
+}
+
 const GEO_TYPES = new Set([
   "street_address", "premise", "subpremise", "route", "intersection",
   "postal_code", "plus_code", "geocode", "political", "locality",
@@ -286,15 +303,14 @@ const GEO_TYPES = new Set([
   "administrative_area_level_3", "country",
 ]);
 
-function isFacility(place, address) {
-  if (!place || !place.displayName || !place.displayName.text) return false;
-  const name = place.displayName.text.trim();
-  if (!name) return false;
-  if (place.primaryType && GEO_TYPES.has(place.primaryType)) return false;
-  const types = place.types || [];
-  if (types.length > 0 && types.every((t) => GEO_TYPES.has(t))) return false;
-  const a = (address || "").replace(/\s/g, "");
-  if (a && a === name.replace(/\s/g, "")) return false;
+// 施設名らしいか（住所そのものではないか）
+function looksLikeName(name) {
+  const n = norm(name);
+  if (!n) return false;
+  // 都道府県から始まる、または丁目/番地表記で終わるものは住所文字列とみなす
+  if (/^(北海道|東京都|京都府|大阪府|.{2,3}県)/.test(n)) return false;
+  if (/[0-9０-９][－\-‐ー]?[0-9０-９]*$/.test(n) && /[市区町村郡]/.test(n)) return false;
+  if (/^〒?[0-9０-９]{3}/.test(n)) return false;
   return true;
 }
 
@@ -327,12 +343,20 @@ async function resolvePlace(inputUrl) {
       const allowed =
         Boolean(info.ftid) ||
         Boolean(info.name) ||
-        (nm && info.query && info.query.replace(/\s/g, "").includes(nm.replace(/\s/g, "")));
+        (nm && info.query && norm(info.query).includes(norm(nm)));
       if (allowed) { place = cand; route = "searchText"; }
       else console.log("[searchText] 住所ピンと判断して不採用:", nm);
     }
   }
 
+  // --- 施設名の決定（APIのdisplayName優先、なければURLのqから建物名を切り出す） ---
+  let name = "";
+  if (place && place.displayName && place.displayName.text) {
+    const cand = place.displayName.text.trim();
+    if (looksLikeName(cand)) name = cand;
+  }
+
+  // --- 住所の決定 ---
   let address = "";
   if (place) address = cleanAddress(place.formattedAddress);
 
@@ -344,39 +368,49 @@ async function resolvePlace(inputUrl) {
   }
   if (!address && info.query) address = cleanAddress(info.query);
 
+  // 住所末尾に施設名が入っている場合は切り離す（ここが今回の修正点）
+  if (name) address = stripNameFromAddress(address, name);
+
+  // --- ジャンル ---
   let genreRaw = "";
   let genre = "";
   let genreSource = "none";
-  let text;
 
-  if (place && isFacility(place, address)) {
-    const name = place.displayName.text.trim();
+  if (name && place) {
+    const pt = place.primaryType || "";
+    const isGeoOnly =
+      (pt && GEO_TYPES.has(pt)) ||
+      ((place.types || []).length > 0 && (place.types || []).every((t) => GEO_TYPES.has(t)));
 
     if (place.primaryTypeDisplayName && place.primaryTypeDisplayName.text) {
       genreRaw = place.primaryTypeDisplayName.text;
       genreSource = "api";
-    } else {
+    } else if (!isGeoOnly || true) {
       const g = await genreFromMapsPage(place.id || info.placeId, name);
       if (g) { genreRaw = g; genreSource = "mapsPage"; }
     }
-
     genre = shortenGenre(genreRaw, name);
+  }
 
-    let addr = address;
-    if (addr.replace(/\s/g, "").endsWith(name.replace(/\s/g, ""))) {
-      addr = addr.slice(0, addr.length - name.length).trim();
-    }
+  // --- 文言組み立て ---
+  let text;
+  if (name && address) {
     text = genre
-      ? addr + "に所在する" + genre + "'" + name + "'へ入る。"
-      : addr + "に所在する'" + name + "'へ入る。";
+      ? address + "に所在する" + genre + "'" + name + "'へ入る。"
+      : address + "に所在する'" + name + "'へ入る。";
+  } else if (name && !address) {
+    text = genre ? genre + "'" + name + "'へ入る。" : "'" + name + "'へ入る。";
   } else {
     if (!address) throw new Error("住所を特定できませんでした");
     text = address + "へ入る。";
   }
 
-  console.log("[result] route =", route, "/ genreRaw =", genreRaw,
-    "/ genre =", genre, "(" + genreSource + ") /", text);
-  return { finalUrl: expanded.finalUrl, info, place, route, genreRaw, genre, genreSource, text };
+  console.log("[result] route =", route, "/ name =", name,
+    "/ genreRaw =", genreRaw, "/ genre =", genre, "(" + genreSource + ") /", text);
+  return {
+    finalUrl: expanded.finalUrl, info, place, route,
+    name, address, genreRaw, genre, genreSource, text,
+  };
 }
 
 async function urlToReportText(inputUrl) {
