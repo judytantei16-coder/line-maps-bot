@@ -11,16 +11,11 @@ const config = {
 const app = express();
 const client = new line.Client(config);
 
-// GoogleマップURLを検出する正規表現
-// maps.app.goo.gl（短縮）と www.google.com/maps（通常）の両方に対応
 const MAPS_URL_REGEX =
   /(https?:\/\/maps\.app\.goo\.gl\/\S+|https?:\/\/(?:www\.)?google\.com\/maps\/\S+|https?:\/\/goo\.gl\/maps\/\S+)/;
 
-// LINEのWebhookエンドポイント（署名検証つき）
 app.post("/webhook", line.middleware(config), async (req, res) => {
-  // 先にLINE側へ200を返す（LINEは応答が遅いとリトライしてくるため）
   res.status(200).end();
-
   const events = req.body.events || [];
   for (const event of events) {
     handleEvent(event).catch((err) => {
@@ -34,12 +29,15 @@ async function handleEvent(event) {
 
   const text = event.message.text;
   const match = text.match(MAPS_URL_REGEX);
-  if (!match) return; // GoogleマップURLが含まれていないメッセージは無視
+  if (!match) return;
 
   const mapsUrl = match[1];
 
+  // LINEのメッセージから施設名を抽出（URLの前後にあるテキスト）
+  const beforeUrl = text.replace(mapsUrl, "").trim();
+
   try {
-    const replyText = await urlToReportText(mapsUrl);
+    const replyText = await urlToReportText(mapsUrl, beforeUrl);
     await client.replyMessage(event.replyToken, {
       type: "text",
       text: replyText,
@@ -53,7 +51,6 @@ async function handleEvent(event) {
   }
 }
 
-// 動作確認用（ブラウザで開いてサーバーが動いているか確認できる）
 app.get("/", (req, res) => {
   res.send("LINE Maps Bot is running.");
 });
