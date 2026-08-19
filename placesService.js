@@ -2,15 +2,13 @@ const axios = require("axios");
 
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
-async function searchPlaceNew(query, hint) {
-  // クエリ：URLから抽出した名前 or LINEのテキストから抽出したヒント
-  const searchQuery = query || hint;
-  console.log("検索クエリ:", searchQuery);
+async function searchPlaceNew(query) {
+  console.log("検索クエリ:", query);
 
   const res = await axios.post(
     "https://places.googleapis.com/v1/places:searchText",
     {
-      textQuery: searchQuery,
+      textQuery: query,
       languageCode: "ja",
     },
     {
@@ -25,6 +23,54 @@ async function searchPlaceNew(query, hint) {
   const place = res.data?.places?.[0];
   console.log("検索結果:", JSON.stringify(place));
   return place || null;
+}
+
+async function expandShortUrl(shortUrl) {
+  const res = await axios.get(shortUrl, {
+    maxRedirects: 10,
+    validateStatus: (status) => status < 400,
+  });
+  return res.request?.res?.responseUrl || res.request?.responseURL || shortUrl;
+}
+
+function extractFacilityName(url) {
+  const decoded = decodeURIComponent(url);
+
+  // /place/施設名/ の形式から抽出
+  const placeMatch = decoded.match(/\/place\/([^/@?]+)/);
+  if (placeMatch) {
+    const name = placeMatch[1].replace(/\+/g, " ").trim();
+    // 住所っぽくない（〒・数字始まり・都道府県のみでない）場合だけ使う
+    if (name && !/^〒/.test(name) && !/^[-\d.,]+$/.test(name)) {
+      return name;
+    }
+  }
+  return null;
+}
+
+function extractLatLng(url) {
+  const decoded = decodeURIComponent(url);
+  const latLngMatch = decoded.match(/@(-?\d+\.\d+),(-?\d+\.\d+),/);
+  if (latLngMatch) {
+    return {
+      lat: parseFloat(latLngMatch[1]),
+      lng: parseFloat(latLngMatch[2]),
+    };
+  }
+  return { lat: null, lng: null };
+}
+
+function isAddressOnlyUrl(url) {
+  const decoded = decodeURIComponent(url);
+  // /place/ がない、またはqパラメータが住所形式
+  const hasPlacePath = /\/place\//.test(decoded);
+  if (!hasPlacePath) return true;
+
+  const placeMatch = decoded.match(/\/place\/([^/@?]+)/);
+  if (!placeMatch) return true;
+
+  const name = placeMatch[1].replace(/\+/g, " ").trim();
+  return /^〒/.test(name) || /^[-\d.,]+$/.test(name);
 }
 
 async function reverseGeocode(lat, lng) {
@@ -63,38 +109,6 @@ function formatPlaceText(place) {
   }
 }
 
-async function expandShortUrl(shortUrl) {
-  const res = await axios.get(shortUrl, {
-    maxRedirects: 10,
-    validateStatus: (status) => status < 400,
-  });
-  return res.request?.res?.responseUrl || res.request?.responseURL || shortUrl;
-}
-
-function parseMapsUrl(url) {
-  const decoded = decodeURIComponent(url);
-
-  let nameMatch = decoded.match(/\/place\/([^/@?]+)/);
-  let name = nameMatch ? nameMatch[1].replace(/\+/g, " ").trim() : null;
-
-  if (!name) {
-    const qMatch = decoded.match(/[?&]q=([^&]+)/);
-    if (qMatch) name = decodeURIComponent(qMatch[1].replace(/\+/g, " ")).trim();
-  }
-
-  const latLngMatch = decoded.match(/@(-?\d+\.\d+),(-?\d+\.\d+),/);
-  const lat = latLngMatch ? parseFloat(latLngMatch[1]) : null;
-  const lng = latLngMatch ? parseFloat(latLngMatch[2]) : null;
-
-  // 住所ピン判定：名前がない、〒・数字のみ・都道府県名のみ
-  const isAddressPin =
-    !name ||
-    /^〒/.test(name) ||
-    /^[-\d.,]+$/.test(name);
-
-  return { name, lat, lng, isAddressPin };
-}
-
 async function urlToReportText(mapsUrl, lineText) {
   const expandedUrl = mapsUrl.includes("goo.gl")
     ? await expandShortUrl(mapsUrl)
@@ -102,21 +116,25 @@ async function urlToReportText(mapsUrl, lineText) {
 
   console.log("展開後URL:", expandedUrl);
 
-  const { name, lat, lng, isAddressPin } = parseMapsUrl(expandedUrl);
-
-  // 住所ピンかつ緯度経度あり → 住所だけ返す
-  if (isAddressPin && lat != null && lng != null) {
-    const address = await reverseGeocode(lat, lng);
-    return `${address}へ入る。`;
+  // 住所ピン判定
+  if (isAddressOnlyUrl(expandedUrl)) {
+    const { lat, lng } = extractLatLng(expandedUrl);
+    if (lat != null && lng != null) {
+      const address = await reverseGeocode(lat, lng);
+      return `${address}へ入る。`;
+    }
   }
 
-  // 施設名をURLから取得 or LINEテキストから取得
-  const searchQuery = name || lineText;
+  // 施設名をURLから抽出
+  const facilityName = extractFacilityName(expandedUrl);
+
+  // 検索クエリは施設名のみ（住所なし）
+  const searchQuery = facilityName || lineText;
   if (!searchQuery) {
     throw new Error("施設名を特定できませんでした");
   }
 
-  const place = await searchPlaceNew(searchQuery, lineText);
+  const place = await searchPlaceNew(searchQuery);
   if (!place) {
     throw new Error("該当する場所が見つかりませんでした");
   }
