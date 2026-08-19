@@ -42,8 +42,7 @@ async function handleEvent(event) {
   }
 }
 
-// ブラウザから動作確認する用
-// 例: https://line-maps-bot.onrender.com/debug?url=https://maps.app.goo.gl/xxxx
+// 動作確認用: https://line-maps-bot.onrender.com/debug?url=短縮URL
 app.get("/debug", async (req, res) => {
   const url = req.query.url;
   if (!url) return res.status(400).type("text/plain; charset=utf-8").send("?url=... を付けてください");
@@ -54,10 +53,15 @@ app.get("/debug", async (req, res) => {
         {
           text: r.text,
           route: r.route,
+          genre: r.genre,
+          genreSource: r.genreSource,
           finalUrl: r.finalUrl,
           parsed: r.info,
           displayName: r.place && r.place.displayName ? r.place.displayName.text : null,
-          genre: r.place && r.place.primaryTypeDisplayName ? r.place.primaryTypeDisplayName.text : null,
+          primaryType: r.place ? r.place.primaryType || null : null,
+          primaryTypeDisplayName:
+            r.place && r.place.primaryTypeDisplayName ? r.place.primaryTypeDisplayName.text : null,
+          types: r.place ? r.place.types || null : null,
           formattedAddress: r.place ? r.place.formattedAddress : null,
         },
         null,
