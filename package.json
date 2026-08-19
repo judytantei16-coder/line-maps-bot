@@ -1,16 +1,17 @@
 {
   "name": "line-maps-bot",
-  "version": "1.0.0",
-  "description": "GoogleマップのURLをLINEに送ると、報告書向けのテキストに整形して返信するBot",
+  "version": "2.0.0",
+  "private": true,
   "main": "index.js",
-  "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "dependencies": {
-    "@line/bot-sdk": "^9.4.2",
-    "axios": "^1.7.7",
-    "express": "^4.21.0",
-    "dotenv": "^16.4.5"
+    "@line/bot-sdk": "^8.4.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
   }
 }
