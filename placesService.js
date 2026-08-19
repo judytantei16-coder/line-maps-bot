@@ -263,10 +263,9 @@ function shortenGenre(genre, placeName) {
   return picked;
 }
 
-/* ============ 6. 住所整形 ============ */
+/* ============ 6. 住所整形・判定 ============ */
 const norm = (s) => String(s || "").replace(/\s|　/g, "");
 
-// 共通の下処理（「日本、」と郵便番号を除去）
 function baseAddress(s) {
   if (!s) return "";
   let a = String(s).trim();
@@ -275,12 +274,10 @@ function baseAddress(s) {
   return a.trim();
 }
 
-// スタイル1用：ハイフンを全角に
 function toStyle1Address(a) {
   return String(a || "").replace(/[-‐‑‒–—−]/g, "－").trim();
 }
 
-// スタイル2用：数字とハイフンを半角に
 function toStyle2Address(a) {
   let s = String(a || "");
   s = s.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
@@ -304,22 +301,25 @@ function stripNameFromAddress(address, name) {
   return a;
 }
 
-const GEO_TYPES = new Set([
-  "street_address", "premise", "subpremise", "route", "intersection",
-  "postal_code", "plus_code", "geocode", "political", "locality",
-  "sublocality", "sublocality_level_1", "sublocality_level_2",
-  "sublocality_level_3", "sublocality_level_4",
-  "administrative_area_level_1", "administrative_area_level_2",
-  "administrative_area_level_3", "country",
-]);
+/**
+ * その文字列が「施設名」ではなく「住所そのもの」かを判定する。
+ * ・郵便番号で始まる → 住所
+ * ・住所の中に丸ごと含まれていて、かつ数字/丁目/番地/号で終わる → 住所
+ *   （「埼玉県立川越南高等学校」は住所に含まれないので施設名。
+ *     「プレサンス本駒込アカデミア」は含まれるが数字で終わらないので施設名。）
+ */
+function isAddressLike(candidate, address) {
+  const n = norm(candidate);
+  if (!n) return true;
+  if (/^〒|^[0-9０-９]{3}[-－]?[0-9０-９]{4}/.test(n)) return true;
 
-function looksLikeName(name) {
-  const n = norm(name);
-  if (!n) return false;
-  if (/^(北海道|東京都|京都府|大阪府|.{2,3}県)/.test(n)) return false;
-  if (/[0-9０-９][－\-‐ー]?[0-9０-９]*$/.test(n) && /[市区町村郡]/.test(n)) return false;
-  if (/^〒?[0-9０-９]{3}/.test(n)) return false;
-  return true;
+  const a = norm(address);
+  const containedInAddress = a && a.includes(n);
+  const endsWithNumberish = /([0-9０-９]|丁目|番地|番|号)$/.test(n);
+
+  if (containedInAddress && endsWithNumberish) return true;
+  if (a && a === n) return true;
+  return false;
 }
 
 /* ============ 7. 本体 ============ */
@@ -357,12 +357,7 @@ async function resolvePlace(inputUrl) {
     }
   }
 
-  let name = "";
-  if (place && place.displayName && place.displayName.text) {
-    const cand = place.displayName.text.trim();
-    if (looksLikeName(cand)) name = cand;
-  }
-
+  // --- 先に住所を確定させる ---
   let address = "";
   if (place) address = baseAddress(place.formattedAddress);
 
@@ -373,6 +368,14 @@ async function resolvePlace(inputUrl) {
     address = baseAddress(await reverseGeocode(info.lat, info.lng));
   }
   if (!address && info.query) address = baseAddress(info.query);
+
+  // --- 住所と突き合わせて施設名を判定 ---
+  let name = "";
+  if (place && place.displayName && place.displayName.text) {
+    const cand = place.displayName.text.trim();
+    if (!isAddressLike(cand, address)) name = cand;
+    else console.log("[name] 住所文字列と判断して不採用:", cand);
+  }
 
   if (name) address = stripNameFromAddress(address, name);
 
