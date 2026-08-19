@@ -243,4 +243,71 @@ async function resolvePlace(inputUrl) {
     if (place) route = "place_id";
   }
 
-  
+  if (!place && info.ftid) {
+    const pid = await placeIdFromFtid(info.ftid);
+    if (pid) {
+      place = await getPlaceDetails(pid);
+      if (place) route = "ftid";
+    }
+  }
+
+  if (!place && (info.query || info.name)) {
+    const q = info.name
+      ? (info.name + " " + (info.query || "")).trim()
+      : info.query;
+    const cand = await searchText(q, info.lat, info.lng);
+    if (cand) {
+      const nm = cand.displayName && cand.displayName.text ? cand.displayName.text : "";
+      const allowed =
+        Boolean(info.ftid) ||
+        Boolean(info.name) ||
+        (nm && info.query && info.query.replace(/\s/g, "").includes(nm.replace(/\s/g, "")));
+      if (allowed) { place = cand; route = "searchText"; }
+      else console.log("[searchText] 住所ピンと判断して不採用:", nm);
+    }
+  }
+
+  let address = "";
+  if (place) address = cleanAddress(place.formattedAddress);
+
+  if (!address && info.query && !/^-?\d+\.\d+,/.test(info.query.trim())) {
+    address = cleanAddress(await geocodeAddress(info.query)) || cleanAddress(info.query);
+  }
+  if (!address && info.lat !== null) {
+    address = cleanAddress(await reverseGeocode(info.lat, info.lng));
+  }
+  if (!address && info.query) address = cleanAddress(info.query);
+
+  let text;
+  if (place && isFacility(place, address)) {
+    const name = place.displayName.text.trim();
+    let addr = address;
+    if (addr.replace(/\s/g, "").endsWith(name.replace(/\s/g, ""))) {
+      addr = addr.slice(0, addr.length - name.length).trim();
+    }
+    const genre =
+      place.primaryTypeDisplayName && place.primaryTypeDisplayName.text
+        ? place.primaryTypeDisplayName.text
+        : "";
+    text = genre
+      ? addr + "に所在する" + genre + "'" + name + "'へ入る。"
+      : addr + "に所在する'" + name + "'へ入る。";
+  } else {
+    if (!address) throw new Error("住所を特定できませんでした");
+    text = address + "へ入る。";
+  }
+
+  console.log("[result] route =", route, "/ text =", text);
+  return { finalUrl: expanded.finalUrl, info, place, route, text };
+}
+
+async function urlToReportText(inputUrl) {
+  const r = await resolvePlace(inputUrl);
+  return r.text;
+}
+
+async function urlToDebug(inputUrl) {
+  return await resolvePlace(inputUrl);
+}
+
+module.exports = { urlToReportText, urlToDebug };
