@@ -1,5 +1,4 @@
 const axios = require("axios");
-const { getJapaneseLabel } = require("./typeLabels");
 
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
@@ -16,10 +15,6 @@ async function expandShortUrl(shortUrl) {
 function parseMapsUrl(url) {
   const decoded = decodeURIComponent(url);
 
-  // Place ID を抽出（最も確実）
-  const placeIdMatch = decoded.match(/[?&]?1s(0x[0-9a-fA-F:%]+)/);
-
-  // 店名抽出
   let nameMatch = decoded.match(/\/place\/([^/@?]+)/);
   let name = nameMatch ? nameMatch[1].replace(/\+/g, " ").trim() : null;
 
@@ -33,13 +28,13 @@ function parseMapsUrl(url) {
     if (searchMatch) name = searchMatch[1].replace(/\+/g, " ").trim();
   }
 
-  // 緯度経度
   const latLngMatch = decoded.match(/@(-?\d+\.\d+),(-?\d+\.\d+),/);
   const lat = latLngMatch ? parseFloat(latLngMatch[1]) : null;
   const lng = latLngMatch ? parseFloat(latLngMatch[2]) : null;
 
-  // 住所ピンかどうか（店名が座標っぽい or 数字のみ or 〒から始まる）
+  const hasPlacePath = /\/place\//.test(decoded);
   const isAddressPin =
+    !hasPlacePath ||
     !name ||
     /^\d/.test(name) ||
     /^〒/.test(name) ||
@@ -70,22 +65,22 @@ async function findPlaceId({ name, lat, lng }) {
 }
 
 async function getPlaceDetails(placeId) {
+  // Places API (New) を使用してprimaryTypeDisplayNameを取得
   const res = await axios.get(
-    "https://maps.googleapis.com/maps/api/place/details/json",
+    `https://places.googleapis.com/v1/places/${placeId}`,
     {
-      params: {
-        place_id: placeId,
-        fields: "name,formatted_address,types,rating,user_ratings_total",
-        language: "ja",
-        key: GOOGLE_MAPS_API_KEY,
+      headers: {
+        "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+        "X-Goog-FieldMask": "displayName,formattedAddress,primaryTypeDisplayName",
       },
+      params: { languageCode: "ja" },
     }
   );
 
-  if (res.data.status !== "OK") {
-    throw new Error(`Places API error: ${res.data.status}`);
+  if (!res.data) {
+    throw new Error("Places API (New) error");
   }
-  return res.data.result;
+  return res.data;
 }
 
 async function reverseGeocode(lat, lng) {
@@ -111,10 +106,17 @@ function stripPostalCode(address) {
 }
 
 function formatPlaceText(place) {
-  const label = getJapaneseLabel(place.types, place.name);
-  const address = stripPostalCode(place.formatted_address || "");
-  console.log("業種判定:", place.name, "→", label, "| types:", place.types);
-  return `${address}に所在する${label}'${place.name}'へ入る。`;
+  const name = place.displayName?.text || "";
+  const address = stripPostalCode(place.formattedAddress || "");
+  const label = place.primaryTypeDisplayName?.text || null;
+
+  console.log("業種判定:", name, "→", label);
+
+  if (label) {
+    return `${address}に所在する${label}'${name}'へ入る。`;
+  } else {
+    return `${address}に所在する'${name}'へ入る。`;
+  }
 }
 
 async function urlToReportText(mapsUrl) {
@@ -124,7 +126,6 @@ async function urlToReportText(mapsUrl) {
 
   const { name, lat, lng, isAddressPin } = parseMapsUrl(expandedUrl);
 
-  // 住所ピンの場合：逆ジオコーディングで住所だけ返す
   if (isAddressPin && lat != null && lng != null) {
     const address = await reverseGeocode(lat, lng);
     return `${address}へ入る。`;
