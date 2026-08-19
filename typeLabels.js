@@ -1,1 +1,1 @@
-module.exports = { getJapaneseLabel: () => null };
+module.exports = {};
