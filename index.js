@@ -14,10 +14,8 @@ const client = new line.Client(config);
 const MAPS_URL_REGEX =
   /(https?:\/\/maps\.app\.goo\.gl\/\S+|https?:\/\/(?:www\.)?google\.com\/maps\S*|https?:\/\/goo\.gl\/maps\/\S+)/;
 
-// 環境変数 DEFAULT_STYLE で全体の初期スタイルを変えられる（1 か 2）
 const DEFAULT_STYLE = process.env.DEFAULT_STYLE === "2" ? 2 : 1;
 
-// ユーザー/グループごとのスタイル記憶（サーバー再起動でリセット）
 const styleMap = new Map();
 
 function scopeIdOf(event) {
@@ -37,7 +35,7 @@ function parseStyleCommand(text) {
   const t = text.trim().replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
   if (/^(スタイル|style)\s*1$/i.test(t)) return 1;
   if (/^(スタイル|style)\s*2$/i.test(t)) return 2;
-  if (/^(スタイル|style)$/i.test(t)) return 0; // 現在の設定を表示
+  if (/^(スタイル|style)$/i.test(t)) return 0;
   return null;
 }
 
@@ -53,7 +51,6 @@ async function handleEvent(event) {
   if (event.type !== "message" || event.message.type !== "text") return;
   const text = event.message.text;
 
-  // --- スタイル切替コマンド ---
   const cmd = parseStyleCommand(text);
   if (cmd !== null) {
     let msg;
@@ -61,7 +58,7 @@ async function handleEvent(event) {
       const cur = getStyle(event);
       msg =
         "現在のスタイル: " + cur + "\n\n" +
-        "スタイル1: 東京都港区芝１丁目１２－７に所在するコンビニエンスストア'セブン－イレブン 港区芝１丁目店'へ入る。\n\n" +
+        "スタイル1: 東京都港区芝１丁目１２－７に所在するコンビニエンスストア'セブン－イレブン 港区芝１丁目店'\n\n" +
         "スタイル2: コンビニエンスストア「セブン-イレブン 港区芝１丁目店」(東京都港区芝1丁目12-7)\n\n" +
         "「スタイル1」「スタイル2」と送ると切り替わります。";
     } else {
@@ -76,7 +73,6 @@ async function handleEvent(event) {
     return;
   }
 
-  // --- URL処理 ---
   const match = text.match(MAPS_URL_REGEX);
   if (!match) return;
   const style = getStyle(event);
@@ -96,7 +92,6 @@ async function handleEvent(event) {
   }
 }
 
-// 動作確認用: /debug?url=短縮URL
 app.get("/debug", async (req, res) => {
   const url = req.query.url;
   if (!url) return res.status(400).type("text/plain; charset=utf-8").send("?url=... を付けてください");
