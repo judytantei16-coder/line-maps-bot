@@ -301,13 +301,6 @@ function stripNameFromAddress(address, name) {
   return a;
 }
 
-/**
- * その文字列が「施設名」ではなく「住所そのもの」かを判定する。
- * ・郵便番号で始まる → 住所
- * ・住所の中に丸ごと含まれていて、かつ数字/丁目/番地/号で終わる → 住所
- *   （「埼玉県立川越南高等学校」は住所に含まれないので施設名。
- *     「プレサンス本駒込アカデミア」は含まれるが数字で終わらないので施設名。）
- */
 function isAddressLike(candidate, address) {
   const n = norm(candidate);
   if (!n) return true;
@@ -357,7 +350,6 @@ async function resolvePlace(inputUrl) {
     }
   }
 
-  // --- 先に住所を確定させる ---
   let address = "";
   if (place) address = baseAddress(place.formattedAddress);
 
@@ -369,7 +361,6 @@ async function resolvePlace(inputUrl) {
   }
   if (!address && info.query) address = baseAddress(info.query);
 
-  // --- 住所と突き合わせて施設名を判定 ---
   let name = "";
   if (place && place.displayName && place.displayName.text) {
     const cand = place.displayName.text.trim();
@@ -403,20 +394,22 @@ async function resolvePlace(inputUrl) {
 }
 
 /* ============ 8. スタイル別の文言組み立て ============ */
+// スタイル1: 住所 + に所在する + ジャンル + '施設名'（末尾は ' で終わる）
 function formatStyle1(r) {
   const addr = toStyle1Address(r.address);
   if (r.name && addr) {
     return r.genre
-      ? addr + "に所在する" + r.genre + "'" + r.name + "'へ入る。"
-      : addr + "に所在する'" + r.name + "'へ入る。";
+      ? addr + "に所在する" + r.genre + "'" + r.name + "'"
+      : addr + "に所在する'" + r.name + "'";
   }
   if (r.name && !addr) {
-    return r.genre ? r.genre + "'" + r.name + "'へ入る。" : "'" + r.name + "'へ入る。";
+    return r.genre ? r.genre + "'" + r.name + "'" : "'" + r.name + "'";
   }
   if (!addr) throw new Error("住所を特定できませんでした");
-  return addr + "へ入る。";
+  return addr;
 }
 
+// スタイル2: ジャンル「施設名」(住所)
 function formatStyle2(r) {
   const addr = toStyle2Address(r.address);
   if (r.name) {
